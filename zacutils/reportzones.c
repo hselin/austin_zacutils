@@ -1,6 +1,8 @@
-/*
+/**
  * (c) 2015 Western Digital Technologies, Inc. All rights reserved.
- *
+ * Front-end tool for the ATA REPORT ZONES DMA command
+ * Compliant to ZAC Specification draft, revision 0.8n (March 4, 2015)
+ * Author: Austin Liou (austin.liou@wdc.com)
  */
 #include <fcntl.h>
 #include <string.h>
