@@ -28,6 +28,7 @@ You can run the tools with the `-?` flag to view usage details.
  * -? : Print out usage.
  * -l : First LBA of zone to reset.  Optional.  If omitted, will reset ALL zones.
  * device : Device handle to open (e.g. /dev/sdb).  Required.
+
 ## Known Issues
 * **resetzones** does not retrieve the correct sense error codes for certain failures.  Instead, you may see a failure with (SK=0x0b, ASC=0x00, ASCQ=0x00).
 * **reportzones** does not currently support reporting options.
