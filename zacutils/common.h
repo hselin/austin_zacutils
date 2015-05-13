@@ -13,8 +13,17 @@
 #include <stdint.h>
 #include <scsi/sg.h>
 
+/// ATA Command Pass-Through definitions
 #define ATA_PASS_THROUGH_16 0x85
 #define ATA_PASS_THROUGH_16_LEN 16
+
+#define ATA_FLAGS_TLEN_SECC 0x02
+#define ATA_FLAGS_BYTBLK (0x1<<2)
+#define ATA_FLAGS_TDIR (0x1<<3)
+#define ATA_FLAGS_CKCOND (0x1<<5)
+
+#define ATA_PROTOCOL_NONDATA 0x3
+#define ATA_PROTOCOL_DMA 0x6
 
 #define ATA_REPORT_ZONES_DMA 0x4a
 #define ATA_RESET_WRITE_POINTER 0x9f
@@ -40,3 +49,18 @@ struct AtaStatusReturnDescriptor {
 
 bool getSenseErrors(uint8_t* senseBuff, struct KeyCodeQualifier* kcq);
 bool senseToAtaRegisters(uint8_t* senseBuff, struct AtaStatusReturnDescriptor* descriptor);
+bool ataPassthrough16(
+	int& sg_fd,
+	uint8_t cmd,
+	uint16_t features,
+	uint16_t count,
+	uint64_t lba,
+	uint8_t device,
+	uint8_t protocol,
+	uint8_t flags,
+	int dxfer_dir,
+	uint8_t* dxferp,
+	unsigned int dxfer_len,
+	uint8_t* sbp,
+	unsigned char mx_sb_len
+);

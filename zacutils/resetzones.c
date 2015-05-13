@@ -18,10 +18,8 @@ int main(int argc, char * argv[])
 {
 	int opt;
 	int sg_fd;
-	uint8_t cdb[ATA_PASS_THROUGH_16_LEN];
-	sg_io_hdr_t io_hdr;
-	uint64_t lba;
-	bool hasLbaArg = false;
+	uint64_t lba = 0;
+	bool resetAll = true;
 	uint8_t senseBuff[32];
 
 	while ((opt = getopt (argc, argv, "l:?")) != -1){
@@ -33,7 +31,7 @@ int main(int argc, char * argv[])
 					fprintf(stderr, "Invalid -l argument.  Use -? for usage.\n");
 					return 1;
 				}
-				hasLbaArg = true;
+				resetAll = false;
 				break;
 			case '?':
 				usage();
@@ -52,37 +50,21 @@ int main(int argc, char * argv[])
 	}
 
 	printf("Sending RESET WRITE POINTER command...\n");
-	memset(cdb, 0, sizeof(cdb));
-	cdb[0] = ATA_PASS_THROUGH_16;
-	cdb[1] = (0x3 << 1) | 0x01;	// Non-data, 48-bit ATA command
-	cdb[2] = 0x1 << 5;		// Check condition bit set
-	cdb[4] = 0x04;			// Action: 04h
-	if (hasLbaArg){
-		cdb[7] = (lba>>24)&0xff;
-		cdb[8] = (lba&0xff);
-		cdb[9] = (lba>>32)&0xff;
-		cdb[10] = (lba>>8)&0xff;
-		cdb[11] = (lba>>40)&0xff;
-		cdb[12] = (lba>>16)&0xff;
-	} else {
-		cdb[3] |= 0x01;		// ALL bit set (reset all write pointers)
-	}
-	cdb[14] = ATA_RESET_WRITE_POINTER;
-	memset(&io_hdr, 0, sizeof(sg_io_hdr_t));
-	io_hdr.interface_id = 'S';
-	io_hdr.cmdp = cdb;
-	io_hdr.cmd_len = sizeof(cdb);
-	io_hdr.dxferp = NULL;
-	io_hdr.dxfer_direction = SG_DXFER_NONE;
-	io_hdr.dxfer_len = 0;
-	io_hdr.sbp = senseBuff;
-	io_hdr.mx_sb_len = sizeof(senseBuff);
-	io_hdr.timeout = 10000;
-	if (ioctl(sg_fd, SG_IO, &io_hdr) < 0) {
-		perror("ioctl error");
-		close(sg_fd);
-		return 1;
-	}
+	if (!ataPassthrough16(
+		sg_fd,
+		ATA_RESET_WRITE_POINTER,
+		(resetAll ? 1<<8 : 0) | 0x04,	// ALL bit if necessary, ACTION=0x04
+		0x0000,
+		lba,
+		0x00,
+		ATA_PROTOCOL_NONDATA,
+		ATA_FLAGS_CKCOND,
+		SG_DXFER_NONE,
+		NULL,
+		0,
+		senseBuff,
+		sizeof(senseBuff)
+	)){ return 1; }
 
 	// Check if command completed successfully
 	struct KeyCodeQualifier kcq;
@@ -99,26 +81,22 @@ int main(int argc, char * argv[])
 	
 	// Issue REQUEST SENSE DATA EXT if reset failed
 	memset(senseBuff, 0, sizeof(senseBuff));
-	memset(cdb, 0, sizeof(cdb));
-	cdb[0] = ATA_PASS_THROUGH_16;
-	cdb[1] = (0x3 << 1) | 0x01;
-	cdb[2] = 0x1 << 5;
-	cdb[14] = ATA_REQUEST_SENSE_DATA_EXT;
-	memset(&io_hdr, 0, sizeof(sg_io_hdr_t));
-	io_hdr.interface_id = 'S';
-	io_hdr.cmdp = cdb;
-	io_hdr.cmd_len = sizeof(cdb);
-	io_hdr.dxferp = NULL;
-	io_hdr.dxfer_direction = SG_DXFER_NONE;
-	io_hdr.dxfer_len = 0;
-	io_hdr.sbp = senseBuff;
-	io_hdr.mx_sb_len = sizeof(senseBuff);
-	io_hdr.timeout = 10000;
-	if (ioctl(sg_fd, SG_IO, &io_hdr) < 0) {
-		perror("ioctl error");
-		close(sg_fd);
-		return 1;
-	}
+	if (!ataPassthrough16(
+		sg_fd,
+		ATA_REQUEST_SENSE_DATA_EXT,
+		0x0000,
+		0x0000,
+		0x0000,
+		0x00,
+		ATA_PROTOCOL_NONDATA,		// Device bit 6 "shall be set to one"
+		ATA_FLAGS_CKCOND,
+		SG_DXFER_NONE,
+		NULL,
+		0,
+		senseBuff,
+		sizeof(senseBuff)
+	)){ return 1; }
+
 	close(sg_fd);
 
 	memset(&kcq, 0, sizeof(kcq));

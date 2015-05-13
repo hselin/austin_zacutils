@@ -22,6 +22,7 @@ You can run the tools with the `-?` flag to view usage details.
  * -? : Print out usage.
  * -o : Offset of first zone to list (default: 1).  Optional.
  * -n : Number of zones to list (default: to last zone).  Optional.
+ * -r : Reporting options, 0x00 to 0x07, 0x10, or 0x3F (default 0x00).  Optional.
  * -c : Print out zone table in CSV format.  Optional.
  * device : Device handle to open (e.g. /dev/sdb).  Required.
 * **resetzones** [-?] [-l *zonestartlba*] *device*
@@ -30,5 +31,4 @@ You can run the tools with the `-?` flag to view usage details.
  * device : Device handle to open (e.g. /dev/sdb).  Required.
 
 ## Known Issues
-* **resetzones** does not retrieve the correct sense error codes for certain failures.  Instead, you may see a failure with (SK=0x0b, ASC=0x00, ASCQ=0x00).
-* **reportzones** does not currently support reporting options.
+* None!
