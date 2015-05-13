@@ -4,18 +4,7 @@
  * Compliant to ZAC Specification draft, revision 0.8n (March 4, 2015)
  * Author: Austin Liou (austin.liou@wdc.com)
  */
-#include <fcntl.h>
-#include <string.h>
-#include <sys/ioctl.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdint.h>
-#include <scsi/sg.h>
-
-#define ATA_PASS_THROUGH_16 0x85
-#define ATA_PASS_THROUGH_16_LEN 16
-#define ATA_REPORT_ZONES_DMA 0x4a
+#include "common.h"
 
 /// Size of buffer, in zone entries.  This will cause ioctl to bug out if too large.
 /// The actual buffer size will be larger to include the header
@@ -49,7 +38,7 @@ void usage(){
 		"	-?	: Print out usage\n"
 		"	-o	: Offset of first zone to list (default: 1).  Optional.\n"
 		"	-n	: # of zones to list (default: to last zone).  Optional.\n"
-		//"	-r	: Reporting options, 0x00 to 0x3F (default 0x00).  Optional.\n"
+		"	-r	: Reporting options, 0x00 to 0x3F (default 0x00).  Optional.\n"
 		"	-c	: Print raw zone table in CSV format.  Optional.\n"
 		"	dev	: The device handle to open (e.g. /dev/sdb).  Required.\n"
 	);
@@ -67,6 +56,7 @@ int main(int argc, char * argv[])
 	sg_io_hdr_t io_hdr;
 	struct ReportZonesHeader zoneHeader;
 	uint8_t zoneHeaderBuff[512];	// Although the header is 64 bytes, we must retrieve at minimum one sector
+	uint8_t senseBuff[32];
 
 	while ((opt = getopt (argc, argv, "o:n:r:c?")) != -1){
 		char* endPtr;
@@ -87,7 +77,7 @@ int main(int argc, char * argv[])
 				break;
 			case 'r':
 				reportingOptions = strtol(optarg,&endPtr,0);
-				if (*endPtr!='\0' || reportingOptions < 0 || reportingOptions > 0x3f){
+				if (*endPtr!='\0' || reportingOptions > 0x3f){
 					fprintf(stderr, "Invalid -r argument.  Use -? for usage.\n");
 					return 1;
 				}
@@ -115,41 +105,65 @@ int main(int argc, char * argv[])
 	memset(cdb, 0, sizeof(cdb));
 	cdb[0] = ATA_PASS_THROUGH_16;
 	cdb[1] = (0x6 << 1) | 0x1;	// DMA in, 48-bit ATA command
-	cdb[2] = (1<<3) | (1<<2) | 0x2;	// (T_DIR|BYT_BLOK|T_LENGTH=2): Transfer n 512-byte blocks from device, where n is sector count
+	cdb[2] = (1<<5) | (1<<3) | (1<<2) | 0x2;	// (CK_COND|T_DIR|BYT_BLOK|T_LENGTH=2): Transfer n 512-byte blocks from device, where n is sector count
+	cdb[3] = reportingOptions;
 	cdb[4] = 0x00;			// ACTION: 00h
 	cdb[6] = 1;			// Retrieve 1 page
 	cdb[13] = 0x1<<6;		// Device bit 6 "shall be set to one"
 	cdb[14] = ATA_REPORT_ZONES_DMA;
 	memset(&io_hdr, 0, sizeof(sg_io_hdr_t));
 	io_hdr.interface_id = 'S';
+	io_hdr.cmdp = cdb;
 	io_hdr.cmd_len = sizeof(cdb);
+	io_hdr.dxferp = zoneHeaderBuff;
 	io_hdr.dxfer_direction = SG_DXFER_FROM_DEV;
 	io_hdr.dxfer_len = 512;
-	io_hdr.dxferp = zoneHeaderBuff;
-	io_hdr.cmdp = cdb;
+	io_hdr.sbp = senseBuff;
+	io_hdr.mx_sb_len = sizeof(senseBuff);
 	io_hdr.timeout = 15000;
 	if (ioctl(sg_fd, SG_IO, &io_hdr) < 0) {
 		perror("ioctl error");
 		close(sg_fd);
 		return 1;
 	}
+
+	// Check if command failed
+	struct KeyCodeQualifier kcq;
+	if (!getSenseErrors(senseBuff, &kcq)){
+		fprintf(stderr, "Error: Could not parse sense buffer from REPORT ZONES DMA command\n");
+		close(sg_fd);
+		return 1;
+	}
+	if (kcq.senseKey == 0x0b && kcq.asc == 0x00 && kcq.ascq == 0x00){
+		fprintf(stderr, "Error: Command aborted.  Is this a ZAC drive?\n");
+		close(sg_fd);
+		return 1;
+	}
+
 	zoneHeader = *(struct ReportZonesHeader*)zoneHeaderBuff;
 	uint32_t numZones = zoneHeader.zoneListLength/sizeof(struct ReportZonesEntry);
 	
-	if (numZones < 1){
-		fprintf(stderr, "Error: Device reported %d zones, is this a ZAC drive?\n", numZones);
-		return 1;
+	if (numZones == 0){
+		printf("Device reported %d zones (with reporting options %#02x)\n", numZones, reportingOptions);
+		return 0;
 	}
-	if (zoneOffset > numZones){
-		fprintf(stderr, "Error: Invalid zone offset (%d)\n", zoneOffset);
-		return 1;
-	}
-	// Request up to the last zone if -n argument would exceed zone range, or is missing
-	if (zoneOffset-1 + maxReqZones > numZones){
-		fprintf(stderr, "Warning: Requested zone range (%d-%d) exceeds number of zones (%d); truncating to max zone\n", zoneOffset, zoneOffset-1+maxReqZones, numZones);
-		maxReqZones = numZones-zoneOffset+1;
-	} else if (maxReqZones == 0){
-		maxReqZones = numZones-zoneOffset+1;
+	if (reportingOptions == 0x00){
+		if (zoneOffset > numZones){
+			fprintf(stderr, "Error: Invalid zone offset (%d)\n", zoneOffset);
+			return 1;
+		}
+		// Request up to the last zone if -n argument would exceed zone range, or is missing
+		if (zoneOffset-1 + maxReqZones > numZones){
+			fprintf(stderr, "Warning: Requested zone range (%u-%u) exceeds number of zones (%u)\n", zoneOffset, zoneOffset-1+maxReqZones, numZones);
+			maxReqZones = numZones-zoneOffset+1;
+		} else if (maxReqZones == 0){
+			maxReqZones = numZones-zoneOffset+1;
+		}
+	} else {
+		if (maxReqZones > numZones){
+			fprintf(stderr, "Warning: Requested number of zones (%u) exceeds number of reported zones (%u), with reporting options %#02x\n", maxReqZones, numZones, reportingOptions);
+			maxReqZones = numZones;
+		}
 	}
 
 	struct ReportZonesEntry zoneTable[maxReqZones];
@@ -173,6 +187,7 @@ int main(int argc, char * argv[])
 				cdb[0] = ATA_PASS_THROUGH_16;
 				cdb[1] = (0x6 << 1) | 0x01;
 				cdb[2] = (1<<3) | (1<<2) | 0x2;
+				cdb[3] = 0x00;	//Do not filter with reporting options, since we need the previous zone
 				cdb[4] = 0x00;
 				cdb[5] = (pagesRequested>>8);
 				cdb[6] = pagesRequested&0xff;
@@ -211,20 +226,22 @@ int main(int argc, char * argv[])
 		case 0x1:
 		case 0x2:
 		case 0x3:
-			// Zone lengths are same as first zone, so we can retrieve the zone length from zone 1 and calculate correct offset LBA
+			// Zone lengths are same as first zone, so we can retrieve the zone length from any zone and calculate correct offset LBA
+			// The special case is SAME=02h (last zone may be smaller), but if the zone we grab here is the last zone, it's also the ONLY zone so length is moot
 			uint64_t zoneLength = (*(struct ReportZonesEntry*) &((struct ReportZonesHeader*)zoneHeaderBuff)[1]).zoneLength;
 			zoneStartLba = (zoneOffset-1) * zoneLength;
 			break;
 	}
 
 	// Get zone entries in chunks starting from detected LBA offset
-	for (uint32_t i=0; i<maxReqZones; i+=REPORT_ZONES_ENTRY_BUFFER_SIZE){
+	uint32_t numRecordsRetrieved;
+	for (uint32_t i=0; i<maxReqZones; i+= REPORT_ZONES_ENTRY_BUFFER_SIZE){
 		memset(&parameterDataBuff, 0, sizeof(parameterDataBuff));
 		memset(cdb, 0, sizeof(cdb));
 		cdb[0] = ATA_PASS_THROUGH_16;
 		cdb[1] = (0x6 << 1) | 0x01;
 		cdb[2] = (1<<3) | (1<<2) | 0x2;
-		cdb[3] = 0;
+		cdb[3] = reportingOptions;
 		cdb[4] = 0x00;
 		cdb[5] = (pagesRequested>>8);
 		cdb[6] = pagesRequested&0xff;
@@ -251,7 +268,9 @@ int main(int argc, char * argv[])
 		}
 		// Copy the retrieved zone entries into the complete zone table, and increment start LBA
 		zoneEntries = (struct ReportZonesEntry*)(&parameterDataBuff[sizeof(struct ReportZonesHeader)]);
+		numRecordsRetrieved = (*(struct ReportZonesHeader*)parameterDataBuff).zoneListLength / sizeof(struct ReportZonesEntry);
 		uint32_t min = maxReqZones-i > REPORT_ZONES_ENTRY_BUFFER_SIZE ? REPORT_ZONES_ENTRY_BUFFER_SIZE : maxReqZones-i;
+		//printf("RETRIEVED %u\n",i,maxReqZones,numRecordsRetrieved,pagesRequested);
 		memcpy(&zoneTable[i], zoneEntries, sizeof(struct ReportZonesEntry)*min);
 		zoneStartLba = zoneEntries[REPORT_ZONES_ENTRY_BUFFER_SIZE-1].zoneStartLba + zoneEntries[REPORT_ZONES_ENTRY_BUFFER_SIZE-1].zoneLength;
 	}

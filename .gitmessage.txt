@@ -1,6 +1,9 @@
-[LeanKit Card Link: X]
+One line commit summary
 
-Change Notes:
+-Details about commit
+-Bullets OK!
 
 Test Results:
+-Explain!
 
+[LeanKit Card Link: X]

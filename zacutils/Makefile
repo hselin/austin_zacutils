@@ -9,20 +9,24 @@
 CC = g++
 CFLAGS = -O3 
 OUT_DIR = .
-LIBS =
+LIBS = common.h
 
 default: reportzones resetzones
 
-reportzones: $(OUT_DIR)/reportzones.c.o
+reportzones: common.c.o $(OUT_DIR)/reportzones.c.o
 	@echo -n 'Linking reportzones... '
-	@$(CC) $(CFLAGS) -o reportzones $(OUT_DIR)/reportzones.c.o $(LIBS)
+	@$(CC) $(CFLAGS) -o reportzones $(OUT_DIR)/reportzones.c.o $(OUT_DIR)/common.c.o $(LIBS)
 	@echo Done.
 
-resetzones: $(OUT_DIR)/resetzones.c.o
+resetzones: common.c.o $(OUT_DIR)/resetzones.c.o
 	@echo -n 'Linking resetzones... '
-	@$(CC) $(CFLAGS) -o resetzones $(OUT_DIR)/resetzones.c.o $(LIBS)
+	@$(CC) $(CFLAGS) -o resetzones $(OUT_DIR)/resetzones.c.o $(OUT_DIR)/common.c.o $(LIBS)
 	@echo Done.
 
+common.c.o: common.c common.h
+	@echo -n 'common.c... '
+	@$(CC) $(CFLAGS) -o $(OUT_DIR)/common.c.o -c common.c
+	@echo Done.
 
 $(OUT_DIR)/reportzones.c.o: reportzones.c
 	@echo -n 'Compiling reportzones.c... '
