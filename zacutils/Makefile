@@ -9,7 +9,7 @@
 CC = g++
 CFLAGS = -O3 
 OUT_DIR = .
-LIBS = common.h
+LIBS =
 
 default: reportzones resetzones
 
