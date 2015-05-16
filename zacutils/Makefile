@@ -6,39 +6,32 @@
 # Type 'make clean' to delete all temporaries.
 #
 
-CC = g++
-CFLAGS = -O3 
+CC = gcc
+CXX = g++
+CFLAGS = -std=gnu99
+CXXFLAGS =
+CPPFLAGS = -I. -O3 -pedantic
 OUT_DIR = .
 LIBS =
 
-default: reportzones resetzones
+TARGETS = reportzones resetzones
+DEPS = common.h reportzones.h resetzones.h
 
-reportzones: common.c.o $(OUT_DIR)/reportzones.c.o
-	@echo -n 'Linking reportzones... '
-	@$(CC) $(CFLAGS) -o reportzones $(OUT_DIR)/reportzones.c.o $(OUT_DIR)/common.c.o $(LIBS)
-	@echo Done.
+default: $(TARGETS)
 
-resetzones: common.c.o $(OUT_DIR)/resetzones.c.o
-	@echo -n 'Linking resetzones... '
-	@$(CC) $(CFLAGS) -o resetzones $(OUT_DIR)/resetzones.c.o $(OUT_DIR)/common.c.o $(LIBS)
-	@echo Done.
+%.o: %.c $(DEPS)
+	@echo -n 'Compiling $<... '
+	@$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $(OUT_DIR)/$@ $<
+	@echo 'Done.'
 
-common.c.o: common.c common.h
-	@echo -n 'common.c... '
-	@$(CC) $(CFLAGS) -o $(OUT_DIR)/common.c.o -c common.c
-	@echo Done.
+$(TARGETS): %: %.o common.o
+	@echo -n 'Linking $<... '
+	@$(CC) $(CPPFLAGS) $(CFLAGS) -o $(OUT_DIR)/$@ $^ $(LIBS)
+	@echo 'Done.'
 
-$(OUT_DIR)/reportzones.c.o: reportzones.c
-	@echo -n 'Compiling reportzones.c... '
-	@$(CC) $(CFLAGS) -o $(OUT_DIR)/reportzones.c.o -c reportzones.c
-	@echo Done.
-
-$(OUT_DIR)/resetzones.c.o: resetzones.c
-	@echo -n 'Compiling resetzones.c... '
-	@$(CC) $(CFLAGS) -o $(OUT_DIR)/resetzones.c.o -c resetzones.c
-	@echo Done.
-
+.PHONY: clean
 clean:
 	@echo -n 'Removing all temporary binaries... '
-	@rm -f reportzones resetzones $(OUT_DIR)/*.o
+	@rm -f $(TARGETS)
+	@rm -f $(OUT_DIR)/*.o
 	@echo Done.

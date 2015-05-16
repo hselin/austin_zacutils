@@ -4,34 +4,7 @@
  * Compliant to ZAC Specification draft, revision 0.8n (March 4, 2015)
  * Author: Austin Liou (austin.liou@wdc.com)
  */
-#include "common.h"
-
-/// Size of buffer, in zone entries.  This will cause ioctl to bug out if too large.
-/// The actual buffer size will be larger to include the header
-#define REPORT_ZONES_ENTRY_BUFFER_SIZE 2047
-
-/// REPORT ZONES DMA header (64 bytes)
-struct ReportZonesHeader {
-	uint32_t zoneListLength;
-	uint16_t options;
-	uint8_t _reserved1[2];
-	uint32_t maxOpenSeqZones;
-	uint32_t unreliableSectors;
-	uint8_t _reserved2[4];
-	uint8_t _reserved3[44];
-};
-
-/// REPORT ZONES DMA record (64 bytes)
-struct ReportZonesEntry {
-	uint16_t options;
-	uint8_t _reserved1[2];
-	uint8_t _reserved2[4];
-	uint64_t zoneLength;
-	uint64_t zoneStartLba;
-	uint64_t writePointer;
-	uint64_t checkpoint;
-	uint8_t _reserved3[24];
-};
+#include "reportzones.h"
 
 void usage(){
 	printf(	"Usage: reportzones [-?] [-o offset] [-n maxzones] dev\n"
@@ -49,9 +22,9 @@ int main(int argc, char * argv[])
 	int opt;
 	int sg_fd;
 
-	int zoneOffset = 1;
-	int maxReqZones = 0;
-	uint8_t reportingOptions = 0;
+	int32_t zoneOffset = 1;
+	int32_t maxReqZones = 0;
+	int32_t reportingOptions = 0;
 	bool csvOutput = false;
 
 	uint8_t dataBuff[sizeof(struct ReportZonesHeader) + sizeof(struct ReportZonesEntry)*REPORT_ZONES_ENTRY_BUFFER_SIZE];
@@ -63,21 +36,21 @@ int main(int argc, char * argv[])
 		switch (opt){
 			case 'o':
 				zoneOffset = strtol(optarg,&endPtr,0);
-				if (*endPtr!='\0' || zoneOffset <= 0){
+				if (*endPtr!='\0' || zoneOffset <= 0 || zoneOffset > MAX_ZONES){
 					fprintf(stderr, "Invalid -o argument.  Use -? for usage.\n");
 					return 1;
 				}
 				break;
 			case 'n':
 				maxReqZones = strtol(optarg,&endPtr,0);
-				if (*endPtr!='\0' || maxReqZones <= 0){
+				if (*endPtr!='\0' || maxReqZones <= 0 || maxReqZones > MAX_ZONES){
 					fprintf(stderr, "Invalid -n argument.  Use -? for usage.\n");
 					return 1;
 				}
 				break;
 			case 'r':
 				reportingOptions = strtol(optarg,&endPtr,0);
-				if (*endPtr!='\0' || reportingOptions > 0x3f || (reportingOptions >= 0x08 && reportingOptions <= 0x0f) || (reportingOptions >= 0x12 && reportingOptions <= 0x3e)){
+				if (*endPtr!='\0' || reportingOptions < 0 || reportingOptions > 0x3F){	// Max 6-bit field
 					fprintf(stderr, "Invalid -r argument.  Use -? for usage.\n");
 					return 1;
 				}
@@ -105,14 +78,15 @@ int main(int argc, char * argv[])
 	uint8_t zoneHeaderBuff[512] = {0};	// Although the header is 64 bytes, we must retrieve at minimum one sector
 	uint8_t senseBuff[32] = {0};
 	if (!ataPassthrough16(
-		sg_fd,
+		&sg_fd,
 		ATA_REPORT_ZONES_DMA,
 		0x0000,	// ACTION: 00h
 		1,	// Retrieve 1 page
 		0x0,
 		0x1<<6,	// Device bit 6 "shall be set to one"
 		ATA_PROTOCOL_DMA,
-		ATA_FLAGS_CKCOND | ATA_FLAGS_TDIR | ATA_FLAGS_BYTBLK | ATA_FLAGS_TLEN_SECC,	// Transfer n 512-byte blocks from device, where n is sector count
+		// Transfer n 512-byte blocks from device, where n is sector count
+		ATA_FLAGS_CKCOND | ATA_FLAGS_TDIR | ATA_FLAGS_BYTBLK | ATA_FLAGS_TLEN_SECC,
 		SG_DXFER_FROM_DEV,
 		zoneHeaderBuff,
 		sizeof(zoneHeaderBuff),
@@ -147,15 +121,15 @@ int main(int argc, char * argv[])
 	uint64_t offsetLba = 0;	//Current zone start offset
 	uint8_t sameOption = zoneHeader.options & 0xF;
 	switch (sameOption){
-		default:
+		default:	// Although option unrecognized, drop into next case by making no assumptions about zone size
 			fprintf(stderr,"Warning: Unrecognized 'same' option in REPORT ZONES DMA header (%d)", sameOption);
-		case 0x0:
-			// If zone lengths differ, we need to spool through preceding zones in chunks to reach offset zone (in order to retrieve correct zone start LBAs)
+		case SAMEOPT_ALLDIFF:
+			// If zone lengths differ, spool through prev. zones to reach offset zone
 			for (int i=1; i<zoneOffset; i+=REPORT_ZONES_ENTRY_BUFFER_SIZE){
 				if (!ataPassthrough16(
-					sg_fd,
+					&sg_fd,
 					ATA_REPORT_ZONES_DMA,
-					0x0000,	//Do not filter with reporting options, since we need the previous zone
+					0x0000,	// Do not filter with reporting options, since we need the previous zone
 					pagesRequested,
 					offsetLba,
 					0x1<<6,
@@ -174,21 +148,22 @@ int main(int argc, char * argv[])
 					offsetLba = zoneEntries[idx].zoneStartLba + zoneEntries[idx].zoneLength;
 				} else {
 					// Update zone LBA offset for next chunk retrieval
-					offsetLba = zoneEntries[REPORT_ZONES_ENTRY_BUFFER_SIZE-1].zoneStartLba + zoneEntries[REPORT_ZONES_ENTRY_BUFFER_SIZE-1].zoneLength;
+					struct ReportZonesEntry lastEntry = zoneEntries[REPORT_ZONES_ENTRY_BUFFER_SIZE-1];
+					offsetLba = lastEntry.zoneStartLba + lastEntry.zoneLength;
 				}
 			}
 			break;
-		case 0x1:
-		case 0x2:
-		case 0x3:
+		case SAMEOPT_FIRSTSAME:
+		case SAMEOPT_LASTDIFF:
+		case SAMEOPT_TYPEDIFF:
 			// Zone lengths are same as first zone, so we can calculate correct offset LBA
 			offsetLba = (zoneOffset-1) * globalZoneLength;
 			break;
 	}
 
-	// Now that we have a zone start LBA, we can re-retrieve the header to get the actual number of zones after filtering and offset
+	// Re-retrieve the header to get the actual number of zones after filtering and offset
 	if (!ataPassthrough16(
-		sg_fd,
+		&sg_fd,
 		ATA_REPORT_ZONES_DMA,
 		(reportingOptions << 8) | 0x00,
 		1,
@@ -220,6 +195,7 @@ int main(int argc, char * argv[])
 	}
 
 	// Get zone entries in chunks starting from detected LBA offset
+	// TODO: Change this to print on-the-fly instead of caching into a large array, to avoid memory issues
 	struct ReportZonesEntry zoneTable[maxReqZones];
 	memset(&zoneTable, 0, sizeof(zoneTable));
 	uint32_t numRecordsRetrieved;
@@ -227,7 +203,7 @@ int main(int argc, char * argv[])
 	for (uint32_t i=0; i<maxReqZones; i+= REPORT_ZONES_ENTRY_BUFFER_SIZE){
 		memset(&dataBuff, 0, sizeof(dataBuff));
 		if (!ataPassthrough16(
-			sg_fd,
+			&sg_fd,
 			ATA_REPORT_ZONES_DMA,
 			(reportingOptions << 8) | 0x00,
 			pagesRequested,
@@ -246,8 +222,9 @@ int main(int argc, char * argv[])
 		zoneEntries = (struct ReportZonesEntry*)(&dataBuff[sizeof(struct ReportZonesHeader)]);
 		numRecordsRetrieved = (*(struct ReportZonesHeader*)dataBuff).zoneListLength / sizeof(struct ReportZonesEntry);
 		uint32_t min = maxReqZones-i > REPORT_ZONES_ENTRY_BUFFER_SIZE ? REPORT_ZONES_ENTRY_BUFFER_SIZE : maxReqZones-i;
-		memcpy(&zoneTable[i], zoneEntries, sizeof(struct ReportZonesEntry)*min);
-		currLba = zoneEntries[REPORT_ZONES_ENTRY_BUFFER_SIZE-1].zoneStartLba + zoneEntries[REPORT_ZONES_ENTRY_BUFFER_SIZE-1].zoneLength;
+		memcpy(&zoneTable[i], zoneEntries, sizeof(struct ReportZonesEntry) * min);
+		struct ReportZonesEntry lastEntry = zoneEntries[REPORT_ZONES_ENTRY_BUFFER_SIZE-1];
+		currLba = lastEntry.zoneStartLba + lastEntry.zoneLength;
 	}
 
 	close(sg_fd);
@@ -257,7 +234,16 @@ int main(int argc, char * argv[])
 		printf("Offset LBA,Requested Zone Count,Reporting Options\n");
 		printf("%#lx,%u,%#x\n",offsetLba,maxReqZones,reportingOptions);
 		printf("Zone List Length,Number of Zones,Offset LBA,Reporting Options,Options,Maximum Number of Open Sequential Write Required Zones,Unreliable Sector Count\n");
-		printf("%u,%u,%#lx,%#x,%#x,%d,%u\n",zoneHeader.zoneListLength,numZones,offsetLba,reportingOptions,zoneHeader.options,zoneHeader.maxOpenSeqZones,zoneHeader.unreliableSectors);
+		printf(
+			"%u,%u,%#lx,%#x,%#x,%d,%u\n",
+			zoneHeader.zoneListLength,
+			numZones,
+			offsetLba,
+			reportingOptions,
+			zoneHeader.options,
+			zoneHeader.maxOpenSeqZones,
+			zoneHeader.unreliableSectors
+		);
 		printf("Zone,Zone Start LBA,Zone Length,Write Pointer,Checkpoint,Option Flags,Zone Type,Zone Condition,Reset\n");
 	} else {
 		printf("Inputs\n");
@@ -290,7 +276,7 @@ int main(int argc, char * argv[])
 	for (uint32_t i=0; i<maxReqZones; i++){
 		startLba = zoneTable[i].zoneStartLba;
 		zoneLength = zoneTable[i].zoneLength;
-		// If zone lengths are equal, we can reliably calculate zone ID for user convenience.  Else, just enumerate as reported.
+		// If zone lengths are equal, we can reliably calculate zone ID for user convenience.  Else, enumerate as reported.
 		if (globalZoneLength != 0){
 			zoneId = (startLba/globalZoneLength)+1;	// Make sure this casts correctly (uint64_t to uint32_t)
 		} else {
@@ -303,42 +289,53 @@ int main(int argc, char * argv[])
 		zoneCon = (optionFlag >> 4) & 0xF;
 		resetBit = optionFlag & 0x1;
 		if (csvOutput){
-			printf("%u,%#lx,%#lx,%#lx,%#lx,%#x,%#x,%#x,%u\n",zoneId,startLba,zoneLength,writePointer,checkpoint,optionFlag,zoneType,zoneCon,resetBit);
+			printf(
+				"%u,%#lx,%#lx,%#lx,%#lx,%#x,%#x,%#x,%u\n",
+				zoneId,
+				startLba,
+				zoneLength,
+				writePointer,
+				checkpoint,
+				optionFlag,
+				zoneType,
+				zoneCon,
+				resetBit
+			);
 		} else {
 			printf("|%5u|%12lXh|%12lXh|%12lXh|%12lXh|",zoneId,startLba,zoneLength,writePointer,checkpoint);
 			switch (zoneType){
-				case 1:
+				case ZONETYPE_CMR:
 					printf("  CMR ");
 					break;
-				case 2:
+				case ZONETYPE_SMR:
 					printf("  SMR ");
 					break;
-				default:
+				default:	// Reserved
 					printf(" ???? ");
 					break;
 			}
 			printf("|");
 			switch (zoneCon){
-				case 0:
+				case ZONECOND_NO_WP:
 					printf("  NO_WP  ");
 					break;
-				case 1:
+				case ZONECOND_EMPTY:
 					printf("  EMPTY  ");
 					break;
-				case 2:
+				case ZONECOND_IMP_OPEN:
 					printf(" IMP OPEN");
 					break;
-				case 4:
+				case ZONECOND_CLOSED:
 					printf("  CLOSED ");
 					break;
-				case 0xE:
+				case ZONECOND_FULL:
 					printf("  FULL   ");
 					break;
-				default:	//Reserved
+				default:	// Reserved
 					printf(" ??????? ");
 					break;
 			}
-			if (resetBit == 1){
+			if (resetBit){
 				printf(" RESET ");
 			} else {
 				printf("       ");
@@ -349,7 +346,7 @@ int main(int argc, char * argv[])
 	if (!csvOutput){
 		printf("|-------------------------------------------------------------------------------------|\n");
 	}
-	if(sameOption == 0x00){
+	if(sameOption == SAMEOPT_ALLDIFF){
 		fprintf(stderr, "WARNING: Zone sizes may differ, so zone IDs may not reflect actual zone number");
 	}
 	return 0;

@@ -4,7 +4,7 @@
  * Compliant to ZAC Specification draft, revision 0.8n (March 4, 2015)
  * Author: Austin Liou (austin.liou@wdc.com)
  */
-#include "common.h"
+#include "resetzones.h"
 
 void usage(){
 	printf(	"Usage: resetzones [-?] [-l zonestartlba] dev\n"
@@ -51,9 +51,9 @@ int main(int argc, char * argv[])
 
 	printf("Sending RESET WRITE POINTER command...\n");
 	if (!ataPassthrough16(
-		sg_fd,
+		&sg_fd,
 		ATA_RESET_WRITE_POINTER,
-		(resetAll ? 1<<8 : 0) | 0x04,	// ALL bit if necessary, ACTION=0x04
+		(resetAll ? RESET_ALL_BIT : 0) | ACTION_RESET_WRITE_POINTER,
 		0x0000,
 		lba,
 		0x00,
@@ -82,13 +82,13 @@ int main(int argc, char * argv[])
 	// Issue REQUEST SENSE DATA EXT if reset failed
 	memset(senseBuff, 0, sizeof(senseBuff));
 	if (!ataPassthrough16(
-		sg_fd,
+		&sg_fd,
 		ATA_REQUEST_SENSE_DATA_EXT,
 		0x0000,
 		0x0000,
-		0x0000,
+		0,
 		0x00,
-		ATA_PROTOCOL_NONDATA,		// Device bit 6 "shall be set to one"
+		ATA_PROTOCOL_NONDATA,
 		ATA_FLAGS_CKCOND,
 		SG_DXFER_NONE,
 		NULL,
@@ -103,7 +103,6 @@ int main(int argc, char * argv[])
 	struct AtaStatusReturnDescriptor ataReturn;
 	if (!getSenseErrors(senseBuff, &kcq) || !senseToAtaRegisters(senseBuff, &ataReturn)){
 		fprintf(stderr, "Error: Could not parse sense buffer from REQUEST SENSE DATA EXT command\n");
-		close(sg_fd);
 		return 1;
 	}
 	if (kcq.senseKey == 0x01 && kcq.asc == 0x00 && kcq.ascq == 0x1d){
@@ -113,17 +112,17 @@ int main(int argc, char * argv[])
 		kcq.ascq = ataReturn.lbaLow & 0xff;
 	}
 	
-	if (kcq.senseKey == 0x0b && kcq.asc == 0x00 && kcq.ascq == 0x00){
+	if (assertKcq(&kcq, ABORTED_COMMAND, ASC_NO_ADDITIONAL_SENSE_INFORMATION)){
 		fprintf(stderr, "Error: Command was aborted, is this a ZAC drive?\n");
-	} else if (kcq.senseKey == 0x05 && kcq.asc == 0x24 && kcq.ascq == 0x00){	//INVALID FIELD IN CDB
+	} else if (assertKcq(&kcq, ILLEGAL_REQUEST, ASC_INVALID_FIELD_IN_CDB)){
 		fprintf(stderr, "Error: Input LBA does not specify start of write pointer zone\n");
-	} else if (kcq.senseKey == 0x05 && kcq.asc == 0x2c && kcq.ascq == 0x0d){	//RESET WRITE POINTER NOT ALLOWED
+	} else if (assertKcq(&kcq, ILLEGAL_REQUEST, ASC_RESET_WRITE_POINTER_NOT_ALLOWED)){
 		fprintf(stderr, "Error: Zone condition is OFFLINE\n");
-	} else if (kcq.senseKey == 0x07 && kcq.asc == 0x27 && kcq.ascq == 0x08){	//ZONE IS READ ONLY
+	} else if (assertKcq(&kcq, DATA_PROTECT, ASC_ZONE_IS_READ_ONLY)){
 		fprintf(stderr, "Error: Zone condition is READ ONLY\n");
 	} else {
 		fprintf(stderr, "Error: RESET WRITE POINTER failed.  Sense data: (SK=0x%02x, ASC=0x%02x, ASCQ=0x%02x)\n", kcq.senseKey, kcq.asc, kcq.ascq);
 	}
 
-	return 0;
+	return 1;
 }

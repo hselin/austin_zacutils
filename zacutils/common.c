@@ -5,8 +5,8 @@
  */
 #include "common.h"
 
-/// Issue an ATA PASS-THROUGH (16)
-bool ataPassthrough16(int& sg_fd, uint8_t cmd, uint16_t features, uint16_t count, uint64_t lba, uint8_t device, uint8_t protocol, uint8_t flags, int dxfer_dir, uint8_t* dxferp, unsigned int dxfer_len, uint8_t* sbp, unsigned char mx_sb_len){
+/// Issue an ATA PASS-THROUGH (16) using SG_IO and ioctl.  Returns success.
+bool ataPassthrough16(int* sg_fd, uint8_t cmd, uint16_t features, uint16_t count, uint64_t lba, uint8_t device, uint8_t protocol, uint8_t flags, int dxfer_dir, uint8_t* dxferp, unsigned int dxfer_len, uint8_t* sbp, unsigned char mx_sb_len){
 	uint8_t cdb[ATA_PASS_THROUGH_16_LEN] = {0};
 	sg_io_hdr_t io_hdr = {0};
 	cdb[0] = ATA_PASS_THROUGH_16;
@@ -32,28 +32,33 @@ bool ataPassthrough16(int& sg_fd, uint8_t cmd, uint16_t features, uint16_t count
 	io_hdr.dxfer_len = dxfer_len;
 	io_hdr.sbp = sbp;
 	io_hdr.mx_sb_len = mx_sb_len;
-	io_hdr.timeout = 10000;
-	if (ioctl(sg_fd, SG_IO, &io_hdr) < 0) {
+	io_hdr.timeout = SG_IO_TIMEOUT;
+	if (ioctl(*sg_fd, SG_IO, &io_hdr) < 0) {
 		perror("ioctl error");
-		close(sg_fd);
+		close(*sg_fd);
 		return false;
 	}
 	return true;
 }
 
-/// Parse out SCSI Key Code Qualifier from sense buffer.  Returns success.
+/// Returns whether kcq matches the values given in senseKey and asc
+bool assertKcq(struct KeyCodeQualifier* kcq, uint8_t senseKey, enum SenseAscValues asc){
+	return kcq->senseKey == senseKey && kcq->asc==((asc>>8)&0xff) && kcq->ascq==(asc&0xff);
+}
+
+/// Retrieves key code qualifier (sense key, asc, ascq) from senseBuff and stores them in kcq.  Returns success.
 bool getSenseErrors(uint8_t* senseBuff, struct KeyCodeQualifier* kcq){
 	uint8_t senseError = senseBuff[0] & 0x7F;
 	switch (senseError){
-		case 0x70:
-		case 0x71:
+		case SCSI_FIXED_CURR:
+		case SCSI_FIXED_PREV:
 			//Fixed format sense data
 			kcq->senseKey = senseBuff[2] & 0xF;
 			kcq->asc = senseBuff[12];
 			kcq->ascq = senseBuff[13];
 			break;
-		case 0x72:
-		case 0x73:
+		case SCSI_DESCRIPTOR_CURR:
+		case SCSI_DESCRIPTOR_PREV:
 			//Descriptor format sense data
 			kcq->senseKey = senseBuff[1] & 0xF;
 			kcq->asc = senseBuff[2];
@@ -68,11 +73,11 @@ bool getSenseErrors(uint8_t* senseBuff, struct KeyCodeQualifier* kcq){
 /// Parse out ATA Status Return Descriptor from sense buffer.  Returns success.
 bool senseToAtaRegisters(uint8_t* senseBuff, struct AtaStatusReturnDescriptor* descriptor){
 	uint8_t senseError = senseBuff[0] & 0x7F;
-	if (senseError != 0x72 && senseError != 0x73){	// Only support descriptor format sense
+	if (senseError != SCSI_DESCRIPTOR_CURR && senseError != SCSI_DESCRIPTOR_PREV){	// Only support descriptor format sense
 		return false;
 	}
 	uint8_t* descTable = &(senseBuff[8]);
-	if (descTable[0] != 0x09 || descTable[1] != 0x0c){	// Invalid header
+	if (descTable[0] != ATA_RETURN_DESCRIPTOR_CODE || descTable[1] != ATA_RETURN_DESCRIPTOR_LEN){	// Invalid header
 		return false;
 	}
 	descriptor->status = descTable[13];
