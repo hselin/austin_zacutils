@@ -28,8 +28,8 @@ int main(int argc, char * argv[])
 	bool csvOutput = false;
 
 	uint8_t dataBuff[sizeof(struct ReportZonesHeader) + sizeof(struct ReportZonesEntry)*REPORT_ZONES_ENTRY_BUFFER_SIZE];
-	struct ReportZonesHeader zoneHeader = {0};
-	struct ReportZonesEntry* zoneEntries = {0};
+	struct ReportZonesHeader zoneHeader;
+	struct ReportZonesEntry* zoneEntries;
 
 	while ((opt = getopt (argc, argv, "o:n:r:c?")) != -1){
 		char* endPtr;
@@ -196,8 +196,7 @@ int main(int argc, char * argv[])
 
 	// Get zone entries in chunks starting from detected LBA offset
 	// TODO: Change this to print on-the-fly instead of caching into a large array, to avoid memory issues
-	struct ReportZonesEntry zoneTable[maxReqZones];
-	memset(&zoneTable, 0, sizeof(zoneTable));
+	struct ReportZonesEntry* zoneTable = (struct ReportZonesEntry*) calloc(maxReqZones, sizeof(struct ReportZonesEntry));
 	uint32_t numRecordsRetrieved;
 	uint64_t currLba = offsetLba;
 	for (uint32_t i=0; i<maxReqZones; i+= REPORT_ZONES_ENTRY_BUFFER_SIZE){
@@ -207,7 +206,7 @@ int main(int argc, char * argv[])
 			ATA_REPORT_ZONES_DMA,
 			(reportingOptions << 8) | 0x00,
 			pagesRequested,
-			offsetLba,
+			currLba,
 			0x1<<6,
 			ATA_PROTOCOL_DMA,
 			ATA_FLAGS_TDIR | ATA_FLAGS_BYTBLK | ATA_FLAGS_TLEN_SECC,
@@ -216,7 +215,10 @@ int main(int argc, char * argv[])
 			sizeof(dataBuff),
 			NULL,
 			0
-		)){ return 1; }
+		)){
+			free(zoneTable);
+			return 1;
+		}
 		
 		// Copy the retrieved zone entries into the complete zone table, and increment start LBA
 		zoneEntries = (struct ReportZonesEntry*)(&dataBuff[sizeof(struct ReportZonesHeader)]);
@@ -349,5 +351,6 @@ int main(int argc, char * argv[])
 	if(sameOption == SAMEOPT_ALLDIFF){
 		fprintf(stderr, "WARNING: Zone sizes may differ, so zone IDs may not reflect actual zone number");
 	}
+	free(zoneTable);
 	return 0;
 }
