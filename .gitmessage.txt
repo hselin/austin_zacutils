@@ -1,0 +1,9 @@
+One line commit summary
+
+-Details about commit
+-Bullets OK!
+
+Test Results:
+-Explain!
+
+[LeanKit Card Link: X]
