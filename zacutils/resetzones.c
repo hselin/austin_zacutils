@@ -73,7 +73,7 @@ int main(int argc, char * argv[])
 		close(sg_fd);
 		return 1;
 	}
-	if (kcq.senseKey == 0x00 || (kcq.senseKey == 0x01 && kcq.asc == 0x00 && kcq.ascq == 0x1d)){
+	if (kcq.senseKey == NO_SENSE || assertKcq(&kcq, RECOVERED_ERROR, ASC_ATA_PASS_THROUGH_INFORMATION_AVAILABLE)){
 		printf("Done.\n");
 		close(sg_fd);
 		return 0;
@@ -105,7 +105,7 @@ int main(int argc, char * argv[])
 		fprintf(stderr, "Error: Could not parse sense buffer from REQUEST SENSE DATA EXT command\n");
 		return 1;
 	}
-	if (kcq.senseKey == 0x01 && kcq.asc == 0x00 && kcq.ascq == 0x1d){
+	if (assertKcq(&kcq, RECOVERED_ERROR, ASC_ATA_PASS_THROUGH_INFORMATION_AVAILABLE)){
 		// Key Code Qualifier is stored in LBA registers of ATA descriptor.  Use that to extract error codes.
 		kcq.senseKey = ataReturn.lbaHigh & 0xff;
 		kcq.asc = ataReturn.lbaMid & 0xff;
