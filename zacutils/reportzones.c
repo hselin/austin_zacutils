@@ -108,7 +108,7 @@ int main(int argc, char * argv[])
 	}
 
 	zoneHeader = *(struct ReportZonesHeader*)zoneHeaderBuff;
-	uint64_t globalZoneLength = (*(struct ReportZonesEntry*) &((struct ReportZonesHeader*)zoneHeaderBuff)[1]).zoneLength;
+	uint64_t globalZoneLength = 0;
 	uint32_t totalNumZones = zoneHeader.zoneListLength/sizeof(struct ReportZonesEntry);
 
 	if (zoneOffset > totalNumZones){
@@ -157,6 +157,7 @@ int main(int argc, char * argv[])
 		case SAMEOPT_LASTDIFF:
 		case SAMEOPT_TYPEDIFF:
 			// Zone lengths are same as first zone, so we can calculate correct offset LBA
+			globalZoneLength = (*(struct ReportZonesEntry*) &((struct ReportZonesHeader*)zoneHeaderBuff)[1]).zoneLength;
 			offsetLba = (zoneOffset-1) * globalZoneLength;
 			break;
 	}
