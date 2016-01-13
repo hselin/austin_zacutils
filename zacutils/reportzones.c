@@ -17,6 +17,45 @@ void usage(){
 	);
 }
 
+void dumpBuffer(unsigned char *buf, unsigned int length, int print_header)
+{
+    unsigned int i;
+    unsigned int x;
+    
+    if(print_header)
+    {
+        printf("buf:%p | length: %d\n", buf, length);
+        printf("------------------------\n");
+    }
+
+    printf("      00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F ASCII\n");
+
+    for( i = 0; i < length; i += 16 )
+    {
+        printf("%4x  ", i);
+
+        for( x = 0; x < 16; x++)
+        {
+            printf("%02x ", *((unsigned char *)buf+i+x));
+        }
+
+        for( x = 0; x < 16; x++)
+        {
+            if((*((unsigned char *)buf+i+x) > 32 ) && (*((unsigned char *)buf+i+x) < 127 ))
+            {
+            //if(*((unsigned char *)buf+i+x)!=0)
+                printf("%c", *((unsigned char *)buf+i+x));
+            }
+            else
+            {
+                printf(".");
+            }
+        }
+        printf("\n");
+    }
+}
+
+
 int main(int argc, char * argv[])
 {
 	int opt;
@@ -277,6 +316,8 @@ int main(int argc, char * argv[])
 	uint8_t zoneCon = 0;
 	uint8_t resetBit = 0;
 	for (uint32_t i=0; i<maxReqZones; i++){
+    dumpBuffer((unsigned char *)&zoneTable[i], sizeof(struct ReportZonesEntry), 1);
+
 		startLba = zoneTable[i].zoneStartLba;
 		zoneLength = zoneTable[i].zoneLength;
 		// If zone lengths are equal, we can reliably calculate zone ID for user convenience.  Else, enumerate as reported.
