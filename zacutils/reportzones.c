@@ -329,9 +329,9 @@ int main(int argc, char * argv[])
 		writePointer = zoneTable[i].writePointer;
 		checkpoint = zoneTable[i].checkpoint;
 		optionFlag = zoneTable[i].options;
-		zoneType = (optionFlag >> 8) & 0xF;
-		zoneCon = (optionFlag >> 4) & 0xF;
-		resetBit = optionFlag & 0x1;
+		zoneType = (optionFlag) & 0xF;
+		zoneCon = (optionFlag >> 12) & 0xF;
+		resetBit = (optionFlag >> 8) & 0x1;
 		if (csvOutput){
 			printf(
 				"%u,%#lx,%#lx,%#lx,%#lx,%#x,%#x,%#x,%u\n",
